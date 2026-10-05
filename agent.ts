@@ -23,10 +23,11 @@ const SEARCH_KEYWORDS = (
 
 const CV_PATH = "./cv.pdf"; // change if your CV has a different name/extension
 const SENT_JOBS_FILE = path.join(process.cwd(), "sent-jobs.json");
-const MAX_AGE_HOURS = 12;
+const MAX_AGE_HOURS = 100;
 const HOME_COUNTRY = "Ethiopia";
-// A job outside HOME_COUNTRY must mention at least one of these to be returned
-const REMOTE_OR_RELOCATION_TERMS = "remote relocation sponsorship";
+// Optional search filter: set to e.g. "remote relocation sponsorship" to only fetch
+// listings that mention at least one of these words. Empty = no filter.
+const REQUIRED_ANY_TERMS = "";
 
 // ---- Simple on-disk dedupe store, so we don't email the same job twice ----
 async function loadSentJobIds(): Promise<Set<string>> {
@@ -49,9 +50,9 @@ async function searchAdzuna(keywords: string): Promise<any[]> {
   const url =
     `https://api.adzuna.com/v1/api/jobs/${ADZUNA_COUNTRY}/search/1` +
     `?app_id=${ADZUNA_APP_ID}&app_key=${ADZUNA_APP_KEY}` +
-    `&results_per_page=50&max_days_old=1&sort_by=date` +
+    `&results_per_page=50&max_days_old=${Math.ceil(MAX_AGE_HOURS / 24)}&sort_by=date` +
     `&what=${encodeURIComponent(keywords)}` +
-    `&what_or=${encodeURIComponent(REMOTE_OR_RELOCATION_TERMS)}`;
+    (REQUIRED_ANY_TERMS ? `&what_or=${encodeURIComponent(REQUIRED_ANY_TERMS)}` : "");
 
   const res = await fetch(url);
   if (!res.ok) {
@@ -64,7 +65,7 @@ async function searchAdzuna(keywords: string): Promise<any[]> {
 // ---- Tool: search Adzuna for fresh jobs across all SEARCH_KEYWORDS ----
 const searchJobsTool = tool(
   "search_jobs",
-  `Search Adzuna for each of these keywords: ${SEARCH_KEYWORDS.join(", ")}. Only returns jobs posted within the last ${MAX_AGE_HOURS} hours that haven't already been emailed, and that mention remote work, relocation or sponsorship somewhere in the listing. Duplicates across keywords are removed. Call it once.`,
+  `Search Adzuna for each of these keywords: ${SEARCH_KEYWORDS.join(", ")}. Only returns jobs posted within the last ${MAX_AGE_HOURS} hours that haven't already been emailed${REQUIRED_ANY_TERMS ? `, and whose listing mentions at least one of: ${REQUIRED_ANY_TERMS}` : ""}. Descriptions are truncated snippets. Duplicates across keywords are removed. Call it once.`,
   {},
   async () => {
     const now = Date.now();
@@ -122,9 +123,12 @@ const sendJobEmailTool = tool(
     jobTitle: z.string(),
     company: z.string(),
     jobUrl: z.string(),
+    locationNote: z
+      .string()
+      .describe("One line on where the job is and what the listing says about remote, relocation or sponsorship, e.g. 'On-site Berlin; sponsorship not mentioned'"),
     coverLetter: z.string().describe("Full cover letter text, ready to copy-paste"),
   },
-  async ({ jobId, jobTitle, company, jobUrl, coverLetter }) => {
+  async ({ jobId, jobTitle, company, jobUrl, locationNote, coverLetter }) => {
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
@@ -136,6 +140,7 @@ const sendJobEmailTool = tool(
       subject: `New match: ${jobTitle} at ${company}`,
       text:
         `Job: ${jobTitle} at ${company}\n` +
+        `Location: ${locationNote}\n` +
         `Apply here: ${jobUrl}\n\n` +
         `--- Draft cover letter (edit before sending) ---\n\n${coverLetter}`,
     });
@@ -165,12 +170,19 @@ Read my CV at ${CV_PATH} to understand my skills, seniority, and target roles.
 
 Then:
 1. Call search_jobs once. It already searches my chosen keywords, so it takes no arguments.
-2. For each returned job that is a genuinely strong match for my CV:
+2. Triage every returned job from its title and snippet. Drop the ones that are clearly a weak or irrelevant match for my CV.
+3. For each remaining job, use WebFetch on its url to read the full listing, since the snippet is truncated. If the fetch fails, decide from the snippet alone. Don't fetch jobs you already dropped in step 2.
+4. For each job that is still a genuinely strong match and passes the location rule below:
    a. Write a specific, honest 3-4 paragraph cover letter that references real details from my CV and from the job description. Never invent skills or experience I don't have.
-   b. Call send_job_email with the job details and the cover letter.
-3. Skip jobs that are a weak or irrelevant match rather than forcing a cover letter.
+   b. Call send_job_email with the job details, a location note and the cover letter.
+5. Skip weak matches rather than forcing a cover letter.
 
-Location rule: I live in ${HOME_COUNTRY}. A job located in ${HOME_COUNTRY} is fine as-is. Any other job only qualifies if it is remote and open to someone working from ${HOME_COUNTRY}, or if it offers relocation support or visa sponsorship. Skip on-site and hybrid roles without relocation or sponsorship, and skip remote roles restricted to residents of a country or region that excludes me (e.g. "remote, US only"). If the listing doesn't make this clear either way, skip it.
+Location rule: I live in ${HOME_COUNTRY} and am willing to relocate. Jobs anywhere (remote, hybrid or on-site) qualify unless the listing explicitly rules me out, for example:
+- it requires an existing local work permit, citizenship or residency, or says no visa sponsorship
+- it is remote but restricted to a country or region that excludes me (e.g. "remote, US only")
+- it requires fluency in a language that isn't on my CV
+- it requires a security clearance
+If the listing doesn't mention remote work, relocation or sponsorship at all, still treat it as a candidate. For on-site and hybrid roles, the cover letter should briefly say I'm based in ${HOME_COUNTRY}, ready to relocate, and would need visa sponsorship.
 
 Work through every job search_jobs returns before finishing.
       `,
@@ -184,6 +196,7 @@ for await (const message of query({
   options: {
     allowedTools: [
       "Read",
+      "WebFetch",
       "mcp__job-agent-tools__search_jobs",
       "mcp__job-agent-tools__send_job_email",
     ],
