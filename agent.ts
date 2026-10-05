@@ -25,6 +25,8 @@ const CV_PATH = "./cv.pdf"; // change if your CV has a different name/extension
 const SENT_JOBS_FILE = path.join(process.cwd(), "sent-jobs.json");
 const MAX_AGE_HOURS = 100;
 const HOME_COUNTRY = "Ethiopia";
+// Any relevant job paying at least this is worth applying to, whatever its seniority
+const MIN_MONTHLY_USD = 1000;
 // Optional search filter: set to e.g. "remote relocation sponsorship" to only fetch
 // listings that mention at least one of these words. Empty = no filter.
 const REQUIRED_ANY_TERMS = "";
@@ -65,7 +67,7 @@ async function searchAdzuna(keywords: string): Promise<any[]> {
 // ---- Tool: search Adzuna for fresh jobs across all SEARCH_KEYWORDS ----
 const searchJobsTool = tool(
   "search_jobs",
-  `Search Adzuna for each of these keywords: ${SEARCH_KEYWORDS.join(", ")}. Only returns jobs posted within the last ${MAX_AGE_HOURS} hours that haven't already been emailed${REQUIRED_ANY_TERMS ? `, and whose listing mentions at least one of: ${REQUIRED_ANY_TERMS}` : ""}. Descriptions are truncated snippets. Duplicates across keywords are removed. Call it once.`,
+  `Search Adzuna for each of these keywords: ${SEARCH_KEYWORDS.join(", ")}. Each job includes salaryMin/salaryMax (annual, local currency, often null). Only returns jobs posted within the last ${MAX_AGE_HOURS} hours that haven't already been emailed${REQUIRED_ANY_TERMS ? `, and whose listing mentions at least one of: ${REQUIRED_ANY_TERMS}` : ""}. Descriptions are truncated snippets. Duplicates across keywords are removed. Call it once.`,
   {},
   async () => {
     const now = Date.now();
@@ -97,6 +99,10 @@ const searchJobsTool = tool(
           location: job.location?.display_name ?? "Unknown",
           postedAt: job.created,
           url: job.redirect_url,
+          // Annual, in the local currency of ADZUNA_COUNTRY; often missing
+          salaryMin: job.salary_min ?? null,
+          salaryMax: job.salary_max ?? null,
+          salaryIsEstimate: job.salary_is_predicted === "1",
           description: job.description,
         });
       }
@@ -170,12 +176,13 @@ Read my CV at ${CV_PATH} to understand my skills, seniority, and target roles.
 
 Then:
 1. Call search_jobs once. It already searches my chosen keywords, so it takes no arguments.
-2. Triage every returned job from its title and snippet. Drop the ones that are clearly a weak or irrelevant match for my CV.
+2. Triage every returned job from its title and snippet. Drop only the ones that need a different profession or a core skill set I clearly don't have (e.g. SAP consulting, embedded C, semiconductor test, product management).
 3. For each remaining job, use WebFetch on its url to read the full listing, since the snippet is truncated. If the fetch fails, decide from the snippet alone. Don't fetch jobs you already dropped in step 2.
-4. For each job that is still a genuinely strong match and passes the location rule below:
+4. For each job whose skills overlap with my CV, that passes the pay rule and the location rule below:
    a. Write a specific, honest 3-4 paragraph cover letter that references real details from my CV and from the job description. Never invent skills or experience I don't have.
    b. Call send_job_email with the job details, a location note and the cover letter.
-5. Skip weak matches rather than forcing a cover letter.
+
+Pay and seniority rule: I'm happy with any job paying at least ${MIN_MONTHLY_USD} USD per month (${MIN_MONTHLY_USD * 12} USD per year), including junior, mid-level, contract and part-time roles. Never skip a job because it seems below my level or because it's only a partial skills match; apply as long as the pay rule and location rule pass and the core skills overlap. Salaries in search results are annual, in the local currency of the search country, and often missing. Only skip a job on pay if the listing or full posting clearly states pay below that threshold after converting to USD. If no salary is given, assume it meets the threshold.
 
 Location rule: I live in ${HOME_COUNTRY} and am willing to relocate. Jobs anywhere (remote, hybrid or on-site) qualify unless the listing explicitly rules me out, for example:
 - it requires an existing local work permit, citizenship or residency, or says no visa sponsorship
