@@ -184,6 +184,8 @@ Location rule: I live in ${HOME_COUNTRY} and am willing to relocate. Jobs anywhe
 - it requires a security clearance
 If the listing doesn't mention remote work, relocation or sponsorship at all, still treat it as a candidate. For on-site and hybrid roles, the cover letter should briefly say I'm based in ${HOME_COUNTRY}, ready to relocate, and would need visa sponsorship.
 
+Every cover letter should also mention, in one or two natural sentences, that I use premium AI coding agents (Claude) in my daily workflow to develop and ship faster, while still reviewing and owning the code myself. Tie it to something the role cares about (e.g. delivery speed, code quality, a small team) rather than bolting it on.
+
 Work through every job search_jobs returns before finishing.
       `,
     },
